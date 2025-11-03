@@ -1,2 +1,2 @@
 # sscl
-CS578 Class Project
+Semi-Supervised Contrastive Learning
