@@ -29,9 +29,8 @@ def _dummy_run():
 		x_uw=x_uw,
 		x_us1=x_us1,
 		x_us2=x_us2,
-		lambda_1=1.0,
-		lambda_2=1.0,
-		lambda_3=1.0,
+		lambda_sup=1.0,
+		lambda_cont=1.0,
 		tau=1.0,
 	)
 

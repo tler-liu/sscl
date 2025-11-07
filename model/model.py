@@ -14,7 +14,7 @@ class SSCLModel(nn.Module):
 	- projection head for contrastive learning (InfoNCE)
 
 	Losses:
-	  L = lambda_1 * L_sup + lambda_2 * L_semi + lambda_3 * L_contr
+	  L = lambda_sup * L_sup + lambda_semi * L_semi + lambda_cont * L_contr
 
 	Semi-sup bound for lambda_semi is computed as:
 	  lambda_semi = min(1, exp(-tau * L_supervised))
@@ -106,12 +106,16 @@ class SSCLModel(nn.Module):
 		x_uw: torch.Tensor,
 		x_us1: torch.Tensor,
 		x_us2: torch.Tensor,
-		lambda_1: float = 1.0,
-		lambda_2: float = 1.0,
-		lambda_3: float = 1.0,
+		lambda_sup: float = 1.0,
+		lambda_cont: float = 1.0,
 		tau: float = 1.0,
 	) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
 		"""Compute L_sup, L_semi, L_contr and total loss.
+
+		Loss computed as:
+		  total = lambda_sup * L_sup + lambda_semi * L_semi + lambda_cont * L_contr
+
+		where lambda_semi = min(1, exp(-tau * L_supervised)).
 
 		Returns (total_loss, metrics_dict)
 		metrics_dict contains 'L_sup', 'L_semi', 'L_contr', 'lambda_semi'
@@ -135,12 +139,11 @@ class SSCLModel(nn.Module):
 		_, proj2 = self.forward(x_us2)
 		L_contr = self._info_nce_loss(proj1, proj2, temperature=self.temperature)
 
-		# Compute bounded lambda_semi
-		# Use detached numeric L_sup to compute scalar weight (no gradient through lambda)
+		# Compute bounded lambda_semi (no gradient through this scalar)
 		Lsup_val = float(L_sup.detach().cpu().item())
 		lambda_semi = min(1.0, math.exp(-tau * Lsup_val))
 
-		total = lambda_1 * L_sup + lambda_2 * (lambda_semi * L_semi) + lambda_3 * L_contr
+		total = lambda_sup * L_sup + lambda_semi * L_semi + lambda_cont * L_contr
 
 		metrics = {
 			'L_sup': L_sup.detach(),
