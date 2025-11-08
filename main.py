@@ -4,7 +4,7 @@ from model.model import SSCLModel
 
 
 def _dummy_run():
-	device = torch.device('cpu')
+	device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 	# toy configuration
 	num_classes = 10
