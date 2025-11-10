@@ -17,18 +17,24 @@ def _dummy_run():
 	# Create dummy tensors simulating augmentations
 	x_l = torch.randn(batch_l, C, H, W, device=device)
 	y_l = torch.randint(0, num_classes, (batch_l,), device=device)
+	x_l_aug_list = [
+		torch.randn(batch_l, C, H, W, device=device),
+		torch.randn(batch_l, C, H, W, device=device),
+	]
 
-	# Unlabeled sets (weak and two strong augmentations). Use same batch size
-	x_uw = torch.randn(batch_u, C, H, W, device=device)
-	x_us1 = torch.randn(batch_u, C, H, W, device=device)
-	x_us2 = torch.randn(batch_u, C, H, W, device=device)
+	# Unlabeled sets (weak and augmentations). Use same batch size
+	x_ul = torch.randn(batch_u, C, H, W, device=device)
+	x_ul_aug_list = [
+		torch.randn(batch_u, C, H, W, device=device),
+		torch.randn(batch_u, C, H, W, device=device),
+	]
 
 	total, metrics = model.compute_losses(
 		x_l=x_l,
 		y_l=y_l,
-		x_uw=x_uw,
-		x_us1=x_us1,
-		x_us2=x_us2,
+		x_l_aug_list=x_l_aug_list,
+		x_ul=x_ul,
+		x_ul_aug_list=x_ul_aug_list,
 		lambda_sup=1.0,
 		lambda_cont=1.0,
 		tau=1.0,

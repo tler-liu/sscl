@@ -1,6 +1,6 @@
 
 import math
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Sequence
 
 import torch
 import torch.nn as nn
@@ -22,8 +22,11 @@ class SSCLModel(nn.Module):
 	Notes:
 	  - Encoder: ResNet50 (pretrained optional)
 	  - Projection head: MLP
-	  - compute_losses expects tensors for: labeled weak (x_l, y), unlabeled weak (x_uw),
-		unlabeled strong 1 (x_us1), unlabeled strong 2 (x_us2).
+	  - compute_losses expects:
+	    • labeled weak batch (x_l) and labels (y_l)
+	    • list of labeled augmentations (x_l_aug_list), each a batch tensor matching x_l
+	    • unlabeled weak batch (x_ul)
+	    • list of unlabeled augmentations (x_ul_aug_list), each a batch tensor matching x_ul
 	"""
 
 	def __init__(
@@ -103,9 +106,9 @@ class SSCLModel(nn.Module):
 		self,
 		x_l: torch.Tensor,
 		y_l: torch.Tensor,
-		x_uw: torch.Tensor,
-		x_us1: torch.Tensor,
-		x_us2: torch.Tensor,
+		x_l_aug_list: Sequence[torch.Tensor],
+		x_ul: torch.Tensor,
+		x_ul_aug_list: Sequence[torch.Tensor],
 		lambda_sup: float = 1.0,
 		lambda_cont: float = 1.0,
 		tau: float = 1.0,
@@ -118,26 +121,55 @@ class SSCLModel(nn.Module):
 		where lambda_semi = min(1, exp(-tau * L_supervised)).
 
 		Returns (total_loss, metrics_dict)
-		metrics_dict contains 'L_sup', 'L_semi', 'L_contr', 'lambda_semi'
+		metrics_dict contains 'L_sup', 'L_sup_cls', 'L_sup_pair', 'L_semi', 'L_contr', 'lambda_semi'
+
+		Notes on inputs:
+		  - x_l, x_ul, and all tensors in x_l_aug_list and x_ul_aug_list must be 4D float tensors (B, C, H, W).
+		  - If your inputs are PIL images or numpy arrays, convert them to tensors before calling this method.
 		"""
 		# Supervised loss on labeled weakly augmented data
 		logits_l, _ = self.forward(x_l)
-		L_sup = F.cross_entropy(logits_l, y_l)
+		L_sup_cls = F.cross_entropy(logits_l, y_l)
 
 		# Semi-supervised loss: get pseudolabels from classifier on unlabeled weak
-		logits_uw, _ = self.forward(x_uw)
+		logits_ul, _ = self.forward(x_ul)
 		with torch.no_grad():
-			probs_uw = F.softmax(logits_uw, dim=1)
-			pseudo_labels = probs_uw.argmax(dim=1)
+			probs_ul = F.softmax(logits_ul, dim=1)
+			pseudo_labels = probs_ul.argmax(dim=1)
 
 		# Use standard CE with pseudo-labels (detached)
-		L_semi = F.cross_entropy(logits_uw, pseudo_labels)
+		L_semi = F.cross_entropy(logits_ul, pseudo_labels)
 
-		# Contrastive loss on the two strong augmentations
-		# Get projections for both strong views
-		_, proj1 = self.forward(x_us1)
-		_, proj2 = self.forward(x_us2)
-		L_contr = self._info_nce_loss(proj1, proj2, temperature=self.temperature)
+		# Supervised pair term over labeled augmentations (Eq. 2 second term)
+		# CE(q(i), q(j)) averaged over all ordered pairs i != j
+		if x_l_aug_list is None or len(x_l_aug_list) < 2:
+			L_sup_pair = torch.tensor(0.0, device=logits_l.device)
+		else:
+			# Compute classifier outputs for each augmentation
+			logits_l_augs = [self.forward(x_aug)[0] for x_aug in x_l_aug_list]
+			log_probs_list = [F.log_softmax(lg, dim=1) for lg in logits_l_augs]
+			probs_list = [F.softmax(lg, dim=1).detach() for lg in logits_l_augs]
+
+			num_views = len(logits_l_augs)
+			pair_losses = []
+			for i in range(num_views):
+				for j in range(num_views):
+					if i == j:
+						continue
+					pair_loss = -(probs_list[i] * log_probs_list[j]).sum(dim=1).mean()
+					pair_losses.append(pair_loss)
+			L_sup_pair = torch.stack(pair_losses).mean() if pair_losses else torch.tensor(0.0, device=logits_l.device)
+
+		# Contrastive loss on unlabeled augmentations (use first two views if available)
+		if x_ul_aug_list is None or len(x_ul_aug_list) < 2:
+			L_contr = torch.tensor(0.0, device=logits_l.device)
+		else:
+			_, proj_ul_1 = self.forward(x_ul_aug_list[0])
+			_, proj_ul_2 = self.forward(x_ul_aug_list[1])
+			L_contr = self._info_nce_loss(proj_ul_1, proj_ul_2, temperature=self.temperature)
+
+		# Total supervised term per Eq. (2)
+		L_sup = L_sup_cls + L_sup_pair
 
 		# Compute bounded lambda_semi (no gradient through this scalar)
 		Lsup_val = float(L_sup.detach().cpu().item())
@@ -147,6 +179,8 @@ class SSCLModel(nn.Module):
 
 		metrics = {
 			'L_sup': L_sup.detach(),
+			'L_sup_cls': L_sup_cls.detach(),
+			'L_sup_pair': L_sup_pair.detach(),
 			'L_semi': L_semi.detach(),
 			'L_contr': L_contr.detach(),
 			'lambda_semi': torch.tensor(lambda_semi, device=L_sup.device),
