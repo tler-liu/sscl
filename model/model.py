@@ -39,7 +39,14 @@ class SSCLModel(nn.Module):
 	) -> None:
 		super().__init__()
 		# Encoder: ResNet50 with final fc replaced by identity so we get 2048-d features
-		resnet = models.resnet50(pretrained=pretrained)
+		# Use the new `weights` argument when available to avoid torchvision deprecation warnings.
+		weights_enum = getattr(models, 'ResNet50_Weights', None)
+		if weights_enum is not None:
+			weights = weights_enum.DEFAULT if pretrained else None
+			resnet = models.resnet50(weights=weights)
+		else:
+			# Fallback for older torchvision versions that use `pretrained=`
+			resnet = models.resnet50(pretrained=pretrained)
 		resnet.fc = nn.Identity()  # feature extractor -> (batch, 2048)
 		self.encoder = resnet
 
