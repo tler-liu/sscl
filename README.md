@@ -36,8 +36,8 @@ python train.py \
 	--tau 1.0 \
 	--epochs 100 \
 	--image-size 224 \
-	--save-dir ./checkpoints
-    --final-model path_of_model.pth
+	--save-dir ./checkpoints \
+    --final-model path_of_model.pth \
     --val-metrics path_of_val_metrics.json
 ```
 
