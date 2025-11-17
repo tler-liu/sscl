@@ -147,42 +147,55 @@ class SSCLModel(nn.Module):
 		# Use standard CE with pseudo-labels (detached)
 		L_semi = F.cross_entropy(logits_ul, pseudo_labels)
 
-		# Supervised pair term over labeled augmentations (Eq. 2 second term)
-		# CE(q(i), q(j)) averaged over all ordered pairs i != j
-		if x_l_aug_list is None or len(x_l_aug_list) < 2:
-			L_sup_pair = torch.tensor(0.0, device=logits_l.device)
+		# "Supervised" pair consistency over UNLABELED data (CE across classifier outputs)
+		# Build an (n_images x m_views) table from base unlabeled batch + its augmentations
+		if x_ul_aug_list is None or len(x_ul_aug_list) < 1:
+			L_sup_pair = torch.tensor(0.0, device=logits_l.device, dtype=logits_l.dtype)
 		else:
-			# Compute classifier outputs for each augmentation
-			logits_l_augs = [self.forward(x_aug)[0] for x_aug in x_l_aug_list]
-			log_probs_list = [F.log_softmax(lg, dim=1) for lg in logits_l_augs]
-			probs_list = [F.softmax(lg, dim=1).detach() for lg in logits_l_augs]
+			logits_ul_views = [self.forward(x_ul)[0]] + [self.forward(x_aug)[0] for x_aug in x_ul_aug_list]
+			logits_ul_table = torch.stack(logits_ul_views, dim=1)  # (B, M, C)
+			probs_table = F.softmax(logits_ul_table, dim=2).detach()     # teacher p (stop-grad)
+			log_probs_table = F.log_softmax(logits_ul_table, dim=2)      # student log q
 
-			num_views = len(logits_l_augs)
-			pair_losses = []
-			for i in range(num_views):
-				for j in range(num_views):
-					if i == j:
-						continue
-					pair_loss = -(probs_list[i] * log_probs_list[j]).sum(dim=1).mean()
-					pair_losses.append(pair_loss)
-			L_sup_pair = torch.stack(pair_losses).mean() if pair_losses else torch.tensor(0.0, device=logits_l.device)
+			B, M, _ = logits_ul_table.shape
+			total_ce = logits_ul_table.new_zeros(())
+			num_pairs = 0
+			for k in range(B):
+				for i in range(M):
+					for j in range(i + 1, M):
+						# one-way CE: CE(p_i -> q_j) for image k
+						ce_kij = -(probs_table[k, i] * log_probs_table[k, j]).sum()
+						total_ce = total_ce + ce_kij
+						num_pairs += 1
+			L_sup_pair = total_ce / max(1, num_pairs)
 
-		# Contrastive loss on unlabeled augmentations (use first two views if available)
-		if x_ul_aug_list is None or len(x_ul_aug_list) < 2:
-			L_contr = torch.tensor(0.0, device=logits_l.device)
+		# Contrastive loss on unlabeled views: average InfoNCE over all unordered view pairs (include base x_ul)
+		if x_ul_aug_list is None or len(x_ul_aug_list) < 1:
+			L_contr = torch.tensor(0.0, device=logits_l.device, dtype=logits_l.dtype)
 		else:
-			_, proj_ul_1 = self.forward(x_ul_aug_list[0])
-			_, proj_ul_2 = self.forward(x_ul_aug_list[1])
-			L_contr = self._info_nce_loss(proj_ul_1, proj_ul_2, temperature=self.temperature)
+			# Collect projection vectors for base unlabeled batch and each augmentation
+			proj_views = []
+			_, proj_base = self.forward(x_ul)
+			proj_views.append(proj_base)
+			for x_aug in x_ul_aug_list:
+				_, proj_aug = self.forward(x_aug)
+				proj_views.append(proj_aug)
+
+			num_views_ul = len(proj_views)
+			contr_losses = []
+			for i in range(num_views_ul):
+				for j in range(i + 1, num_views_ul):
+					contr_losses.append(self._info_nce_loss(proj_views[i], proj_views[j], temperature=self.temperature))
+			L_contr = torch.stack(contr_losses).mean() if contr_losses else torch.tensor(0.0, device=logits_l.device, dtype=logits_l.dtype)
 
 		# Total supervised term per Eq. (2)
 		L_sup = L_sup_cls + L_sup_pair
 
-		# Compute bounded lambda_semi (no gradient through this scalar)
-		Lsup_val = float(L_sup.detach().cpu().item())
-		lambda_semi = min(1.0, math.exp(-tau * Lsup_val))
+		# Compute bounded lambda_semi (no gradient through this scalar), keep on device
+		lambda_semi_t = torch.exp(-tau * L_sup.detach())
+		lambda_semi_t = torch.clamp(lambda_semi_t, max=1.0)
 
-		total = lambda_sup * L_sup + lambda_semi * L_semi + lambda_cont * L_contr
+		total = lambda_sup * L_sup + lambda_semi_t * L_semi + lambda_cont * L_contr
 
 		metrics = {
 			'L_sup': L_sup.detach(),
@@ -190,7 +203,7 @@ class SSCLModel(nn.Module):
 			'L_sup_pair': L_sup_pair.detach(),
 			'L_semi': L_semi.detach(),
 			'L_contr': L_contr.detach(),
-			'lambda_semi': torch.tensor(lambda_semi, device=L_sup.device),
+			'lambda_semi': lambda_semi_t.detach(),
 			'total': total.detach(),
 		}
 		return total, metrics
