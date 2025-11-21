@@ -39,7 +39,8 @@ python train.py \
 	--image-size 224 \
 	--save-dir ./checkpoints \
     --final-model path_of_model.pth \
-    --val-metrics path_of_val_metrics.json
+    --val-metrics path_of_val_metrics.json \
+    --train-plot path_of_training_losses_plot.png
 ```
 
 Notes:
@@ -51,6 +52,7 @@ Notes:
 -   `--save_dir` : directory where checkpoints are written (per-epoch and final checkpoint).
 -   `--final-model` : filepath to save the final model weights (.pth file)
 -   `--val-metrics` : filepath to save validation metrics (JSON file)
+-   `--train-plot` : filepath to save training losses plot (.png file)
 
 Checkpoints are saved as `checkpoint_epoch_{epoch}.pth` and `checkpoint_last.pth` if `final-model` is not specified. Each checkpoint contains the model state dict, optimizer/scheduler states, epoch, and `num_classes` so the model can be reconstructed for evaluation.
 

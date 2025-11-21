@@ -6,6 +6,7 @@ import os
 import torch
 import torch.nn as nn
 import json
+from typing import List
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms, datasets
 from tqdm import tqdm
@@ -239,6 +240,7 @@ def train_sscl(
     val_metrics_filename: Optional[str] = None,
     save_every_epochs: int = 1,
     save_last: bool = True,
+    train_plot_filename: Optional[str] = None,
 ):
     weak_t = get_weak_transform(image_size)
     strong_t = get_strong_transform(image_size)
@@ -260,8 +262,15 @@ def train_sscl(
 
     model.train()
     global_step = 0
+    # track per-epoch averaged metrics
+    epoch_history: List[dict] = []
     for epoch in range(epochs):
         pbar = tqdm(total=len(loader_l), desc=f"Epoch {epoch+1}/{epochs}", unit='it')
+        # accumulators for this epoch
+        sum_L_sup = 0.0
+        sum_L_semi = 0.0
+        sum_L_contr = 0.0
+        batch_count = 0
         for i, batch in enumerate(loader_l):
             x_l, y_l, aug_stack = batch  # x_l: (B, C, H, W), aug_stack: (B, n_views, C,H,W)
             # get corresponding unlabeled batch
@@ -311,10 +320,52 @@ def train_sscl(
                     pbar.write(f"Epoch {epoch+1} Step {i} GlobalStep {global_step} total={total}")
                 pbar.write(str({k: float(v) for k, v in metrics.items()}))
 
+            # accumulate metrics (convert to float); metrics keys from model: 'L_sup', 'L_semi', 'L_contr'
+            try:
+                sum_L_sup += float(metrics.get('L_sup', 0.0))
+            except Exception:
+                sum_L_sup += 0.0
+            try:
+                sum_L_semi += float(metrics.get('L_semi', 0.0))
+            except Exception:
+                sum_L_semi += 0.0
+            try:
+                sum_L_contr += float(metrics.get('L_contr', 0.0))
+            except Exception:
+                sum_L_contr += 0.0
+            batch_count += 1
+
             pbar.update(1)
             global_step += 1
         pbar.close()
+        # compute epoch averages (avoid div by zero)
+        if batch_count > 0:
+            avg_L_sup = sum_L_sup / batch_count
+            avg_L_semi = sum_L_semi / batch_count
+            avg_L_contr = sum_L_contr / batch_count
+        else:
+            avg_L_sup = avg_L_semi = avg_L_contr = 0.0
 
+        epoch_record = {
+            'epoch': epoch + 1,
+            'avg_L_sup': avg_L_sup,
+            'avg_L_semi': avg_L_semi,
+            'avg_L_contr': avg_L_contr,
+            'batches': batch_count,
+        }
+        epoch_history.append(epoch_record)
+
+        # log epoch summary
+        print(f"Epoch {epoch+1} summary: avg_L_sup={avg_L_sup:.6f}, avg_L_semi={avg_L_semi:.6f}, avg_L_contr={avg_L_contr:.6f} over {batch_count} batches")
+
+        # save epoch history to JSON inside save_dir when available
+        if save_dir is not None:
+            try:
+                metrics_path = os.path.join(save_dir, 'train_metrics.json')
+                with open(metrics_path, 'w') as mf:
+                    json.dump(epoch_history, mf, indent=2)
+            except Exception as e:
+                print(f"Failed to save epoch metrics to {metrics_path}: {e}")
         # end of epoch: optionally save a checkpoint
         if save_dir is not None and ((epoch + 1) % save_every_epochs == 0):
             ckpt = {
@@ -378,6 +429,59 @@ def train_sscl(
             except Exception as e:
                 print(f"Failed to save validation metrics to {metrics_path}: {e}")
 
+    # After optionally saving validation metrics, produce a plot of training losses per epoch
+    # epoch_history is collected during training; if present, attempt to plot
+    try:
+        if 'epoch_history' in locals() and epoch_history:
+            try:
+                import matplotlib
+                import matplotlib.pyplot as plt
+            except Exception as e:
+                print(f"matplotlib not available, skipping training loss plot: {e}")
+            else:
+                epochs_list = [r['epoch'] for r in epoch_history]
+                sup_vals = [r['avg_L_sup'] for r in epoch_history]
+                semi_vals = [r['avg_L_semi'] for r in epoch_history]
+                contr_vals = [r['avg_L_contr'] for r in epoch_history]
+
+                plt.figure()
+                plt.plot(epochs_list, sup_vals, marker='o', label='L_sup')
+                plt.plot(epochs_list, contr_vals, marker='o', label='L_contr')
+                plt.plot(epochs_list, semi_vals, marker='o', label='L_semi')
+                plt.xlabel('Epoch')
+                plt.ylabel('Average loss')
+                plt.title('Training losses per epoch')
+                plt.legend()
+                plt.grid(True)
+
+                # choose save path: prefer explicit train_plot_filename when provided
+                if train_plot_filename:
+                    # if user passed an absolute path, use it; else place inside save_dir if provided
+                    if os.path.isabs(train_plot_filename):
+                        plot_path = train_plot_filename
+                    else:
+                        plot_path = os.path.join(save_dir, train_plot_filename) if save_dir else train_plot_filename
+                else:
+                    plot_name = 'train_losses.png'
+                    if save_dir:
+                        try:
+                            os.makedirs(save_dir, exist_ok=True)
+                        except Exception:
+                            pass
+                        plot_path = os.path.join(save_dir, plot_name)
+                    else:
+                        plot_path = plot_name
+
+                try:
+                    plt.savefig(plot_path)
+                    plt.close()
+                    print(f"Saved training loss plot to: {plot_path}")
+                except Exception as e:
+                    print(f"Failed to save training loss plot to {plot_path}: {e}")
+    except Exception:
+        # be resilient: plotting is optional
+        pass
+
 
 if __name__ == '__main__':
     import argparse
@@ -393,6 +497,7 @@ if __name__ == '__main__':
     parser.add_argument('--save-dir', type=str, default='./checkpoints', help='directory to save checkpoints')
     parser.add_argument('--final-model', type=str, default=None, help='filename or path for final model output (overrides default checkpoint_last.pth)')
     parser.add_argument('--val-metrics', type=str, default=None, help='filename or path to save validation metrics JSON (overrides default val_metrics.json)')
+    parser.add_argument('--train-plot', type=str, default=None, help='filename or path to save training plot PNG (overrides default train_losses.png inside --save-dir)')
     parser.add_argument('--device', type=str, default='auto', choices=['auto', 'cuda', 'mps', 'cpu'], help='device override')
     args = parser.parse_args()
 
@@ -440,6 +545,7 @@ if __name__ == '__main__':
         save_dir=args.save_dir,
         final_model_filename=args.final_model,
         val_metrics_filename=args.val_metrics,
+        train_plot_filename=args.train_plot,
         save_every_epochs=1,
         save_last=True,
     )
