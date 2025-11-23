@@ -16,6 +16,7 @@ The project expects Python 3.8+ and the packages listed in `requirements.txt`. A
 -   torch
 -   torchvision
 -   tqdm
+-   matplotlib
 
 Install with pip:
 
