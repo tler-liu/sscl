@@ -62,7 +62,8 @@ Checkpoints are saved as `checkpoint_epoch_{epoch}.pth` and `checkpoint_last.pth
 ## Validation
 
 `validate.py` can be used to run validation testing on a given model file. Note that the settings should match exactly that of
-the settings used for training. 
+the settings used for training. Also note that `train.py` already implements this functionality at the end of the training loop. This
+file just makes it possible to regenerate these artifacts. 
 
 Example script to initiate validation on a given dataset, percentage of labeled data, and hyperparameters:
 
@@ -82,7 +83,11 @@ python validate.py \
 After training you can evaluate a checkpoint with `eval.py`. Example:
 
 ```bash
-python eval.py --ckpt ./checkpoints/checkpoint_last.pth --dataset cifar10 --batch-size 256 --image-size 224
+python eval.py \
+    --ckpt ./checkpoints/checkpoint_last.pth \
+    --dataset cifar10 \
+    --batch-size 256 \
+    --image-size 224
 ```
 
 Notes:
