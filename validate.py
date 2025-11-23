@@ -39,9 +39,9 @@ def plot_train_metrics(metrics_list, out_path: str):
     contr_vals = [r.get('avg_L_contr', 0.0) for r in metrics_list]
 
     plt.figure()
-    plt.plot(epochs_list, sup_vals, marker='o', label='L_sup')
-    plt.plot(epochs_list, contr_vals, marker='o', label='L_contr')
-    plt.plot(epochs_list, semi_vals, marker='o', label='L_semi')
+    plt.plot(epochs_list, sup_vals, label='L_sup')
+    plt.plot(epochs_list, contr_vals, label='L_cont')
+    plt.plot(epochs_list, semi_vals, label='L_semi')
     plt.xlabel('Epoch')
     plt.ylabel('Average loss')
     plt.title('Training losses per epoch')
