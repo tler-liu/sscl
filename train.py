@@ -546,7 +546,7 @@ if __name__ == '__main__':
         final_model_filename=args.final_model,
         val_metrics_filename=args.val_metrics,
         train_plot_filename=args.train_plot,
-        save_every_epochs=1,
+        save_every_epochs=50,
         save_last=True,
     )
     if args.final_model:
