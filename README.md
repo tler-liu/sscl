@@ -6,6 +6,7 @@ This repository contains an implementation of a semi-supervised contrastive lear
 
 -   `model/model.py` — PyTorch module `SSCLModel` (ResNet-50 backbone, classifier head, projection head) and loss helpers (supervised CE, pseudolabel semi-loss, InfoNCE contrastive loss).
 -   `train.py` — training script that pairs labeled and unlabeled data, applies weak/strong augmentations, computes losses, and saves checkpoints.
+-   `validate.py` - validation script that computes validation accuracy on a model and generates loss plots.
 -   `eval.py` — load a checkpoint and compute test top-1 accuracy.
 
 ## Requirements
@@ -56,6 +57,25 @@ Notes:
 -   `--image-size` : for cifar, this should be 32
 
 Checkpoints are saved as `checkpoint_epoch_{epoch}.pth` and `checkpoint_last.pth` if `final-model` is not specified. Each checkpoint contains the model state dict, optimizer/scheduler states, epoch, and `num_classes` so the model can be reconstructed for evaluation.
+
+
+## Validation
+
+`validate.py` can be used to run validation testing on a given model file. Note that the settings should match exactly that of
+the settings used for training. 
+
+Example script to initiate validation on a given dataset, percentage of labeled data, and hyperparameters:
+
+```bash
+python validate.py \
+    --ckpt ./checkpoints/model.pth \
+    --train-metrics ./checkpoints/train_metrics.json \
+	--dataset cifar10 \
+	--labeled-fraction 0.1 \
+    --image-size 32 \
+	--plot-out path_for_loss_plot.png \
+    --val-metrics-out path_for_val_metrics.json
+```
 
 ## Evaluation
 
