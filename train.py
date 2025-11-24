@@ -241,6 +241,8 @@ def train_sscl(
     save_every_epochs: int = 1,
     save_last: bool = True,
     train_plot_filename: Optional[str] = None,
+    resume_ckpt: Optional[str] = None,
+    resume_metrics: Optional[str] = None,
 ):
     weak_t = get_weak_transform(image_size)
     strong_t = get_strong_transform(image_size)
@@ -255,16 +257,64 @@ def train_sscl(
     optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs * len(loader_l))
 
+    # If resuming from a checkpoint, try to load model/optimizer/scheduler state
+    start_epoch = 0
+    global_step = 0
+    # attempt to load epoch history if provided
+    epoch_history: List[dict] = []
+    if resume_ckpt is not None:
+        try:
+            print(f"Resuming from checkpoint: {resume_ckpt}")
+            ckpt = torch.load(resume_ckpt, map_location='cpu')
+            # load model state (allow missing keys if architecture changed slightly)
+            if 'model_state_dict' in ckpt:
+                try:
+                    model.load_state_dict(ckpt['model_state_dict'])
+                except Exception as e:
+                    print(f"Warning: failed to fully load model state_dict: {e}")
+            # load optimizer and scheduler states if present
+            if 'optimizer_state_dict' in ckpt:
+                try:
+                    optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+                except Exception as e:
+                    print(f"Warning: failed to load optimizer state: {e}")
+            if 'scheduler_state_dict' in ckpt:
+                try:
+                    scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+                except Exception as e:
+                    print(f"Warning: failed to load scheduler state: {e}")
+
+            # restore epoch & global_step (epoch in ckpt is last completed epoch index)
+            ckpt_epoch = ckpt.get('epoch', None)
+            if ckpt_epoch is not None:
+                try:
+                    start_epoch = int(ckpt_epoch) + 1
+                except Exception:
+                    start_epoch = 0
+            global_step = int(ckpt.get('global_step', 0))
+        except Exception as e:
+            print(f"Failed to load resume checkpoint {resume_ckpt}: {e}")
+
+    else:
+        # default initial global_step
+        global_step = 0
+
     if save_dir is not None:
         os.makedirs(save_dir, exist_ok=True)
 
     u_iter = infinite_loader(loader_u)
 
     model.train()
-    global_step = 0
-    # track per-epoch averaged metrics
-    epoch_history: List[dict] = []
-    for epoch in range(epochs):
+    # track per-epoch averaged metrics (if we resumed and loaded metrics, retain)
+    if resume_metrics is not None and os.path.exists(resume_metrics):
+        try:
+            with open(resume_metrics, 'r') as mf:
+                epoch_history = json.load(mf)
+                print(f"Loaded {len(epoch_history)} epoch records from {resume_metrics}")
+        except Exception as e:
+            print(f"Failed to read resume metrics file {resume_metrics}: {e}")
+
+    for epoch in range(start_epoch, epochs):
         pbar = tqdm(total=len(loader_l), desc=f"Epoch {epoch+1}/{epochs}", unit='it')
         # accumulators for this epoch
         sum_L_sup = 0.0
@@ -499,6 +549,8 @@ if __name__ == '__main__':
     parser.add_argument('--val-metrics', type=str, default=None, help='filename or path to save validation metrics JSON (overrides default val_metrics.json)')
     parser.add_argument('--train-plot', type=str, default=None, help='filename or path to save training plot PNG (overrides default train_losses.png inside --save-dir)')
     parser.add_argument('--device', type=str, default='auto', choices=['auto', 'cuda', 'mps', 'cpu'], help='device override')
+    parser.add_argument('--resume-ckpt', type=str, default=None, help='path to checkpoint .pth file to resume training from')
+    parser.add_argument('--resume-metrics', type=str, default=None, help='path to train_metrics.json to resume epoch history')
     args = parser.parse_args()
 
     # select device
@@ -546,6 +598,8 @@ if __name__ == '__main__':
         final_model_filename=args.final_model,
         val_metrics_filename=args.val_metrics,
         train_plot_filename=args.train_plot,
+        resume_ckpt=args.resume_ckpt,
+        resume_metrics=args.resume_metrics,
         save_every_epochs=50,
         save_last=True,
     )
